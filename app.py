@@ -8,19 +8,16 @@ import shutil
 import streamlit as st
 import time
 import tempfile
+import uuid  # <--- Added for unique IDs
 from pathlib import Path
 
-# --- Universal FFmpeg Fix (Works on Mac & Cloud) ---
+# --- Universal FFmpeg Fix ---
 def configure_ffmpeg():
-    # 1. First, check if FFmpeg is already in the system path
-    # (This usually works on Cloud if packages.txt is present)
     ffmpeg_path = shutil.which("ffmpeg")
-    
-    # 2. If not found, check standard paths for Mac and Linux manually
     if not ffmpeg_path:
         possible_paths = [
-            "/usr/bin/ffmpeg",              # Streamlit Cloud / Linux
-            "/usr/local/bin/ffmpeg",        # Intel Mac / Linux
+            "/usr/bin/ffmpeg",              # Streamlit Cloud
+            "/usr/local/bin/ffmpeg",        # Intel Mac
             "/opt/homebrew/bin/ffmpeg",     # Apple Silicon Mac
         ]
         for path in possible_paths:
@@ -28,30 +25,26 @@ def configure_ffmpeg():
                 ffmpeg_path = path
                 break
     
-    # 3. Tell the video library where it is
     if ffmpeg_path:
-        # print(f"✅ Found FFmpeg at: {ffmpeg_path}")
         os.environ["IMAGEIO_FFMPEG_EXE"] = ffmpeg_path
-    else:
-        print("⚠️ FFmpeg not found in standard paths.")
+
+configure_ffmpeg()
+# ---------------------------
 
 from pdf_extractor import PDFExtractor
 from api_clients import ElevenLabsClient, HeyGenClient
 from video_composer import VideoComposer
 
-# Configuration - UPDATED FOR CLOUD
-# Try to get keys from Streamlit Secrets (Cloud), otherwise use empty string
+# Configuration
 try:
     ELEVENLABS_API_KEY = st.secrets["ELEVENLABS_API_KEY"]
     HEYGEN_API_KEY = st.secrets["HEYGEN_API_KEY"]
     HEYGEN_AVATAR_ID = st.secrets["HEYGEN_AVATAR_ID"]
 except:
-    # Fallback for local testing if secrets.toml isn't set up
     ELEVENLABS_API_KEY = "" 
     HEYGEN_API_KEY = ""
     HEYGEN_AVATAR_ID = "Abigail_standing_office_front"
 
-# Voices Configuration (Added Female Voices)
 ELEVENLABS_VOICES = {
     "Rachel (American Female)": "21m00Tcm4TlvDq8ikWAM",
     "Nicole (Whisper Female)": "piTKgcLEGmPE4e6mEKli",
@@ -62,32 +55,43 @@ ELEVENLABS_VOICES = {
 
 def main():
     st.set_page_config(page_title="MRI Video Gen", page_icon="🏥", layout="wide")
-    st.title("Expert Radiology Video Report Generator v2")
+    st.title("🏥 MRI Video Report Generator")
+
+    # --- UNIQUE SESSION MANAGEMENT ---
+    if 'session_id' not in st.session_state:
+        st.session_state.session_id = str(uuid.uuid4())
+    
+    # Define unique filename for this specific user
+    user_avatar_file = f"avatar_{st.session_state.session_id}.mp4"
+    # ---------------------------------
 
     if 'extracted_content' not in st.session_state:
         st.session_state.extracted_content = None
     
     with st.sidebar:
         st.header("⚙️ Configuration")
+        
+        # Audio Source
         audio_source = st.radio("Audio Source", ["HeyGen TTS (Recommended)", "ElevenLabs TTS"])
         
         if audio_source == "ElevenLabs TTS":
             selected_voice = st.selectbox("Select Voice", list(ELEVENLABS_VOICES.keys()))
         else:
-            selected_voice = None # HeyGen will auto-select female
+            selected_voice = None
 
-        # Check for locally saved avatar video
-        if os.path.exists("saved_avatar.mp4"):
-            st.success("💾 Found 'saved_avatar.mp4'!")
-            if st.button("🗑️ Delete Saved Video"):
-                os.remove("saved_avatar.mp4")
+        # Check for THIS USER'S saved video
+        if os.path.exists(user_avatar_file):
+            st.success("💾 Found your cached avatar video!")
+            if st.button("🗑️ Generate New (Delete Cache)"):
+                os.remove(user_avatar_file)
                 st.rerun()
         
         st.markdown("---")
-        st.caption("API Keys")
-        new_heygen_key = st.text_input("HeyGen Key", value=st.session_state.get('custom_heygen_key', ''), type="password")
-        if st.button("Save Keys"):
-            st.session_state['custom_heygen_key'] = new_heygen_key
+        # Optional: Allow users to input their own keys on the live site
+        with st.expander("Own API Keys (Optional)"):
+            user_heygen = st.text_input("HeyGen Key", type="password")
+            if user_heygen:
+                st.session_state['custom_heygen_key'] = user_heygen
 
     col1, col2 = st.columns([1, 1])
     
@@ -106,26 +110,18 @@ def main():
         st.header("2. Preview")
         if st.session_state.extracted_content:
             content = st.session_state.extracted_content
-            
-            # Script Preview
             text = content.get('patient_explanation', '')
             with st.expander("📝 Cleaned Script", expanded=False):
                 st.text_area("Script text", value=text, height=150, label_visibility="collapsed")
             
-            # --- RESTORED IMAGE GRID ---
             with st.expander("🖼️ Extracted Images", expanded=True):
                 images = content.get('images', [])
                 if images:
                     st.write(f"Found {len(images)} images")
-                    # Create columns for the grid
                     cols = st.columns(3)
                     for i, img in enumerate(images):
                         with cols[i % 3]:
-                            st.image(
-                                img['image'],
-                                caption=img.get('description', f"Image {i+1}"),
-                                width="stretch" # Fills the column width
-                            )
+                            st.image(img['image'], caption=img.get('description', f"Image {i+1}"), width="stretch")
                 else:
                     st.warning("No images found.")
 
@@ -134,30 +130,41 @@ def main():
     
     if st.session_state.extracted_content:
         if st.button("🎬 Generate Video"):
-            generate_video_pipeline(st.session_state.extracted_content, audio_source, selected_voice)
+            # Pass the unique filename to the generator
+            generate_video_pipeline(
+                st.session_state.extracted_content, 
+                audio_source, 
+                selected_voice, 
+                user_avatar_file
+            )
 
-def generate_video_pipeline(content, audio_source, selected_voice_name):
+def generate_video_pipeline(content, audio_source, selected_voice_name, user_avatar_file):
     status = st.empty()
     progress = st.progress(0)
     
-    # 1. Check for existing local file to SAVE CREDITS
-    if os.path.exists("saved_avatar.mp4"):
-        status.info("♻️ Using existing 'saved_avatar.mp4' from disk (Credits Saved!)")
-        avatar_video_path = "saved_avatar.mp4"
+    # 1. Check for UNIQUE local file
+    if os.path.exists(user_avatar_file):
+        status.info("♻️ Using your cached avatar video (Credits Saved!)")
+        avatar_video_path = user_avatar_file
         progress.progress(50)
         time.sleep(1)
     else:
         # 2. Generate New
         status.text("Connecting to HeyGen...")
+        
+        # Use user key if provided, else use secret
         heygen_key = st.session_state.get('custom_heygen_key') or HEYGEN_API_KEY
+        if not heygen_key:
+            st.error("No API Key found. Please add it in the sidebar or secrets.")
+            return
+
         client = HeyGenClient(heygen_key)
         
-        text = content['patient_explanation'][:1800] # Safe limit
-        
+        text = content['patient_explanation'][:1800]
         voice_id = None
         
-        # --- PATH A: ElevenLabs Audio ---
         if audio_source == "ElevenLabs TTS":
+            # (ElevenLabs logic remains same...)
             eleven_key = ELEVENLABS_API_KEY
             el_client = ElevenLabsClient(eleven_key)
             el_voice_id = ELEVENLABS_VOICES[selected_voice_name]
@@ -172,7 +179,7 @@ def generate_video_pipeline(content, audio_source, selected_voice_name):
             status.text("Uploading audio to HeyGen...")
             audio_url = client.upload_audio(audio_path)
             
-            status.text("Generating Avatar Video (this takes 2-5 mins)...") # <--- STATUS UPDATE
+            status.text("Generating Avatar Video (this takes 2-5 mins)...")
             video_path = client.generate_avatar_video(
                 text=text,
                 avatar_id=HEYGEN_AVATAR_ID,
@@ -181,24 +188,19 @@ def generate_video_pipeline(content, audio_source, selected_voice_name):
                 height=720
             )
             
-        # --- PATH B: HeyGen Internal Audio ---
         else:
             status.text("Selecting HeyGen Female Voice...")
             voices = client.get_voices()
             
-            # Logic: Find English + Female voice
             for v in voices:
                 if 'English' in v.get('language', '') and v.get('gender') == 'female':
                     voice_id = v.get('voice_id')
                     break
             
-            # Fallback if logic fails
             if not voice_id and voices:
                 voice_id = voices[0]['voice_id']
 
-            # --- VITAL FIX: Update status so you know it's working ---
-            status.text("Generating Avatar Video (this takes 2-5 mins)...") 
-            
+            status.text("Generating Avatar Video (this takes 2-5 mins)...")
             video_path = client.generate_avatar_video(
                 text=text,
                 avatar_id=HEYGEN_AVATAR_ID,
@@ -208,11 +210,12 @@ def generate_video_pipeline(content, audio_source, selected_voice_name):
             )
         
         if not video_path:
-            st.error("Video generation failed. Please check the terminal for error details.")
+            st.error("Video generation failed.")
             return
 
-        shutil.copy(video_path, "saved_avatar.mp4")
-        avatar_video_path = "saved_avatar.mp4"
+        # Save with UNIQUE filename
+        shutil.copy(video_path, user_avatar_file)
+        avatar_video_path = user_avatar_file
         progress.progress(50)
     
     # 3. Compose
@@ -223,7 +226,7 @@ def generate_video_pipeline(content, audio_source, selected_voice_name):
     final_path = composer.create_pip_video(
         avatar_video_path=avatar_video_path,
         images=images,
-        output_path="final_output.mp4",
+        output_path=f"output_{st.session_state.session_id}.mp4", # Unique output too
         width=1280,
         height=720
     )

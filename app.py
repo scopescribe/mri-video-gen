@@ -62,7 +62,7 @@ ELEVENLABS_VOICES = {
 
 def main():
     st.set_page_config(page_title="MRI Video Gen", page_icon="🏥", layout="wide")
-    st.title("Expert Radiology Video Report Generator")
+    st.title("Expert Radiology Video Report Generator v2")
 
     if 'extracted_content' not in st.session_state:
         st.session_state.extracted_content = None

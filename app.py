@@ -10,20 +10,30 @@ import time
 import tempfile
 from pathlib import Path
 
-# --- FFmpeg Fix for Mac (Hardcoded) ---
-import os
-# PASTE YOUR PATH HERE (From your previous step)
-FFMPEG_PATH = "/opt/homebrew/bin/ffmpeg" 
-
-if os.path.exists(FFMPEG_PATH):
-    # print(f"✅ Forced ffmpeg path: {FFMPEG_PATH}")
-    os.environ["IMAGEIO_FFMPEG_EXE"] = FFMPEG_PATH
-else:
-    # Fallback search if hardcoded path fails
+# --- Universal FFmpeg Fix (Works on Mac & Cloud) ---
+def configure_ffmpeg():
+    # 1. First, check if FFmpeg is already in the system path
+    # (This usually works on Cloud if packages.txt is present)
     ffmpeg_path = shutil.which("ffmpeg")
+    
+    # 2. If not found, check standard paths for Mac and Linux manually
+    if not ffmpeg_path:
+        possible_paths = [
+            "/usr/bin/ffmpeg",              # Streamlit Cloud / Linux
+            "/usr/local/bin/ffmpeg",        # Intel Mac / Linux
+            "/opt/homebrew/bin/ffmpeg",     # Apple Silicon Mac
+        ]
+        for path in possible_paths:
+            if os.path.exists(path):
+                ffmpeg_path = path
+                break
+    
+    # 3. Tell the video library where it is
     if ffmpeg_path:
+        # print(f"✅ Found FFmpeg at: {ffmpeg_path}")
         os.environ["IMAGEIO_FFMPEG_EXE"] = ffmpeg_path
-# ---------------------------
+    else:
+        print("⚠️ FFmpeg not found in standard paths.")
 
 from pdf_extractor import PDFExtractor
 from api_clients import ElevenLabsClient, HeyGenClient

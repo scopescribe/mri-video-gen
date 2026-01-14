@@ -55,7 +55,7 @@ ELEVENLABS_VOICES = {
 
 def main():
     st.set_page_config(page_title="MRI Video Gen", page_icon="🏥", layout="wide")
-    st.title("🏥 MRI Video Report Generator")
+    st.title("MRI Video Report Generator v3")
 
     # --- UNIQUE SESSION MANAGEMENT ---
     if 'session_id' not in st.session_state:

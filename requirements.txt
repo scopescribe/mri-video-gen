@@ -1,0 +1,9 @@
+streamlit
+pdfplumber
+pdf2image
+Pillow
+PyMuPDF
+moviepy
+opencv-python-headless
+requests
+imageio-ffmpeg
